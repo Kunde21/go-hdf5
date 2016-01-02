@@ -7,18 +7,17 @@ import "C"
 
 import (
 	"fmt"
+	"strings"
 
 	"reflect"
 	"runtime"
 	"unsafe"
 )
 
-type Attribute struct {
-	Location
-}
+type Attribute Identifier
 
 func newAttribute(id C.hid_t) *Attribute {
-	d := &Attribute{Location{Identifier{id}}}
+	d := &Attribute{id: id}
 	runtime.SetFinalizer(d, (*Attribute).finalizer)
 	return d
 }
@@ -44,6 +43,24 @@ func openAttribute(id C.hid_t, name string) (*Attribute, error) {
 	return newAttribute(hid), nil
 }
 
+func getNumAttrs(id Identifier) int {
+	return int(C.H5Aget_num_attrs(id.id))
+}
+
+// Helper function to be implemented on other Attribute-enabled types (File, Group, Dataset, etc)
+func readAttr(id Identifier, name string, data interface{}) error {
+	attr, err := openAttribute(id.id, name)
+	if err != nil {
+		return fmt.Errorf("Error %v opening Attribute, may not exist or name is incorrect", err)
+	}
+	defer attr.Close()
+	return attr.Read(data)
+}
+
+func GetAttribute(id Identifier, name string) (*Attribute, error) {
+	return openAttribute(id.id, name)
+}
+
 func (s *Attribute) finalizer() {
 	if err := s.Close(); err != nil {
 		panic(fmt.Errorf("error closing attr: %s", err))
@@ -55,9 +72,9 @@ func (s *Attribute) Id() int {
 }
 
 // Access the type of an attribute
-func (s *Attribute) GetType() Location {
+func (s *Attribute) GetType() *Datatype {
 	ftype := C.H5Aget_type(s.id)
-	return Location{Identifier{ftype}}
+	return newDatatype(ftype)
 }
 
 // Close releases and terminates access to an attribute.
@@ -80,52 +97,111 @@ func (s *Attribute) Space() *Dataspace {
 }
 
 // Read reads raw data from a attribute into a buffer.
-func (s *Attribute) Read(data interface{}, dtype *Datatype) error {
-	var addr unsafe.Pointer
+func (s *Attribute) Read(data interface{}) error {
 	v := reflect.ValueOf(data)
 
-	switch v.Kind() {
-
-	case reflect.Array:
-		addr = unsafe.Pointer(v.UnsafeAddr())
-
-	case reflect.String:
-		str := (*reflect.StringHeader)(unsafe.Pointer(v.UnsafeAddr()))
-		addr = unsafe.Pointer(str.Data)
-
-	case reflect.Ptr:
-		addr = unsafe.Pointer(v.Pointer())
-
-	default:
-		addr = unsafe.Pointer(v.UnsafeAddr())
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return fmt.Errorf("Attribute: Read(non-pointer %v )", v.Kind())
 	}
 
-	rc := C.H5Aread(s.id, dtype.id, addr)
+	var addr uintptr
+	typ := s.GetType()
+	defer typ.Close()
+
+	switch v.Elem().Kind() {
+
+	case reflect.Array:
+		if v.Elem().Len() == 0 {
+			return nil
+		}
+		if v.Type().Elem().Elem() != typ.GoType() {
+			return fmt.Errorf("Attribute type %v can't be stored in %v", typ.GoType(), v.Type().Elem().Elem())
+		}
+
+		addr = v.Elem().UnsafeAddr()
+
+	case reflect.String: //Special Case read in order to trim null chars
+		if typ.GoType().Kind() != reflect.String { // Avoid type-mismatch panics
+			return fmt.Errorf("Attribute type %v can't be stored in %v", typ.GoType(), reflect.String)
+		}
+		var buf string
+		if ln := int(C.H5Aget_storage_size(s.id)); ln <= v.Elem().Len() {
+			buf = v.Elem().Slice(0, ln).Interface().(string)
+		} else {
+			buf = strings.Repeat("\x00", ln)
+		}
+		rc := h5err(C.H5Aread(s.id, typ.id, unsafe.Pointer(&buf)))
+		if rc != nil {
+			return rc
+		}
+		v.Elem().SetString(strings.Trim(buf, "\x00"))
+		return nil
+	case reflect.Slice:
+		if v.Type().Elem().Elem() != typ.GoType() {
+			return fmt.Errorf("Attribute type %v can't be stored in %v", typ.GoType(), v.Type().Elem().Elem())
+		}
+
+		if ln := int(C.H5Aget_storage_size(s.id)) / int(typ.Size()); ln <= v.Elem().Cap() {
+			v.Elem().SetLen(ln)
+		} else {
+			reflect.Indirect(v).Set(reflect.MakeSlice(v.Elem().Type(), ln, ln))
+		}
+
+		addr = ((*reflect.SliceHeader)(unsafe.Pointer(v.Elem().UnsafeAddr()))).Data
+
+	case reflect.Ptr:
+		return s.Read(reflect.Indirect(v).Interface())
+
+	default:
+		if v.Elem().Type() != typ.GoType() {
+			return fmt.Errorf("Attribute type %v can't be stored in %v", typ.GoType(), v.Type().Elem())
+		}
+		addr = v.Elem().UnsafeAddr()
+	}
+
+	rc := C.H5Aread(s.id, typ.id, unsafe.Pointer(addr))
 	err := h5err(rc)
 	return err
 }
 
 // Write writes raw data from a buffer to an attribute.
-func (s *Attribute) Write(data interface{}, dtype *Datatype) error {
-	var addr unsafe.Pointer
+func (s *Attribute) Write(data interface{}) error {
+
 	v := reflect.ValueOf(data)
-	switch v.Kind() {
 
-	case reflect.Array:
-		addr = unsafe.Pointer(v.UnsafeAddr())
-
-	case reflect.String:
-		str := (*reflect.StringHeader)(unsafe.Pointer(v.UnsafeAddr()))
-		addr = unsafe.Pointer(str.Data)
-
-	case reflect.Ptr:
-		addr = unsafe.Pointer(v.Pointer())
-
-	default:
-		addr = unsafe.Pointer(v.UnsafeAddr())
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return fmt.Errorf("Attribute: Read(non-pointer %v )", v.Type())
 	}
 
-	rc := C.H5Awrite(s.id, dtype.id, addr)
-	err := h5err(rc)
-	return err
+	var addr uintptr
+
+	switch v.Elem().Kind() {
+
+	case reflect.Array:
+		addr = v.Elem().UnsafeAddr()
+
+	case reflect.String:
+		dtype, err := NewDataTypeFromType(v.Elem().Type())
+		str := v.Elem().Interface().(string)
+		if err != nil {
+			return fmt.Errorf("Datatype error: %v", err)
+		}
+		return h5err(C.H5Awrite(s.id, dtype.id, unsafe.Pointer(&str)))
+
+	case reflect.Slice:
+		addr = ((*reflect.SliceHeader)(unsafe.Pointer(v.Elem().UnsafeAddr()))).Data
+
+	case reflect.Ptr:
+		return s.Write(reflect.Indirect(v).Interface())
+
+	default:
+		addr = v.Elem().UnsafeAddr()
+	}
+	dtype, err := NewDataTypeFromType(v.Elem().Type())
+	if err != nil {
+		return fmt.Errorf("Datatype error: %v", err)
+	}
+
+	rc := C.H5Awrite(s.id, dtype.id, unsafe.Pointer(addr))
+	return h5err(rc)
 }

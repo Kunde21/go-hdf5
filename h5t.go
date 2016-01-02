@@ -12,9 +12,7 @@ import (
 	"unsafe"
 )
 
-type Datatype struct {
-	Location
-}
+type Datatype Identifier
 
 type TypeClass C.H5T_class_t
 
@@ -96,12 +94,16 @@ func OpenDatatype(c CommonFG, name string, tapl_id int) (*Datatype, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
-	return NewDatatype(id), nil
+	return newDatatype(id), nil
 }
 
 // NewDatatype creates a Datatype from an hdf5 id.
-func NewDatatype(id C.hid_t) *Datatype {
-	t := &Datatype{Location{Identifier{id}}}
+func NewDatatype(id Identifier) *Datatype {
+	return newDatatype(id.id)
+}
+
+func newDatatype(id C.hid_t) *Datatype {
+	t := &Datatype{id: id}
 	runtime.SetFinalizer(t, (*Datatype).finalizer)
 	return t
 }
@@ -124,7 +126,7 @@ func CreateDatatype(class TypeClass, size int) (*Datatype, error) {
 	if err := checkID(hid); err != nil {
 		return nil, err
 	}
-	return NewDatatype(hid), nil
+	return newDatatype(hid), nil
 }
 
 func (t *Datatype) finalizer() {
@@ -135,6 +137,73 @@ func (t *Datatype) finalizer() {
 
 // GoType returns the reflect.Type associated with the Datatype's TypeClass
 func (t *Datatype) GoType() reflect.Type {
+
+	switch t.Class() {
+	case T_NO_CLASS: // Error
+		return nil
+	case T_INTEGER: // integer types
+		switch C.H5Tget_sign(t.id) {
+		case 1:
+			switch t.Size() {
+			case 1:
+				return _go_int8_t
+			case 2:
+				return _go_int16_t
+			case 4:
+				return _go_int32_t
+			case 8:
+				return _go_int64_t
+			default:
+				return nil
+			}
+		case 0:
+			switch t.Size() {
+			case 1:
+				return _go_uint8_t
+			case 2:
+				return _go_uint16_t
+			case 4:
+				return _go_uint32_t
+			case 8:
+				return _go_uint64_t
+			default:
+				return nil
+			}
+		default:
+			return nil
+		}
+	case T_FLOAT: // floating-point types
+		switch t.Size() {
+		case 4:
+			return _go_float32_t
+		case 8:
+			return _go_float64_t
+		default:
+			return nil
+		}
+	case T_TIME: // date and time types
+		return nil
+	case T_STRING: // character string types
+		return _go_string_t
+	case T_BITFIELD: // bit field types - Possibly uint to hold bitmap?
+		return nil
+	case T_OPAQUE: // opaque types
+		return nil
+	case T_COMPOUND: // compound types - Use
+		return _go_struct_t
+	case T_REFERENCE: // reference types
+		return _go_ptr_t
+	case T_ENUM: // enumeration types
+		return _go_int_t
+	case T_VLEN: // variable-length types
+		//slice type needed
+		return _go_slice_t
+	case T_ARRAY: // array types
+		//array type needed
+		return _go_array_t
+	case T_NCLASSES: // nbr of classes -- MUST BE LAST
+		return nil
+	}
 	return typeClassToGoType[t.Class()]
 }
 
@@ -165,7 +234,7 @@ func copyDatatype(id C.hid_t) (*Datatype, error) {
 	if err := checkID(hid); err != nil {
 		return nil, err
 	}
-	return NewDatatype(hid), nil
+	return newDatatype(hid), nil
 }
 
 // Equal determines whether two datatype identifiers refer to the same datatype.
@@ -204,7 +273,7 @@ func NewArrayType(base_type *Datatype, dims []int) (*ArrayType, error) {
 	if err := checkID(hid); err != nil {
 		return nil, err
 	}
-	t := &ArrayType{Datatype{Location{Identifier{hid}}}}
+	t := &ArrayType{Datatype{id: hid}}
 	runtime.SetFinalizer(t, (*ArrayType).finalizer)
 	return t, nil
 }
@@ -242,7 +311,7 @@ func NewVarLenType(base_type *Datatype) (*VarLenType, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
-	t := &VarLenType{Datatype{Location{Identifier{id}}}}
+	t := &VarLenType{Datatype{id: id}}
 	runtime.SetFinalizer(t, (*VarLenType).finalizer)
 	return t, nil
 }
@@ -263,7 +332,7 @@ func NewCompoundType(size int) (*CompoundType, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
-	t := &CompoundType{Datatype{Location{Identifier{id}}}}
+	t := &CompoundType{Datatype{id: id}}
 	runtime.SetFinalizer(t, (*CompoundType).finalizer)
 	return t, nil
 }
@@ -308,7 +377,7 @@ func (t *CompoundType) MemberType(mbr_idx int) (*Datatype, error) {
 	if err := checkID(hid); err != nil {
 		return nil, err
 	}
-	return NewDatatype(hid), nil
+	return newDatatype(hid), nil
 }
 
 // Insert adds a new member to a compound datatype.

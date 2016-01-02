@@ -174,7 +174,7 @@ func (t *Table) Type() (*Datatype, error) {
 	if err := checkID(hid); err != nil {
 		return nil, err
 	}
-	return NewDatatype(hid), nil
+	return newDatatype(hid), nil
 }
 
 func createTable(id C.hid_t, name string, dtype *Datatype, chunkSize, compression int) (*Table, error) {
