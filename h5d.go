@@ -107,7 +107,7 @@ func (s *Dataset) ReadSubset(data interface{}, memspace, filespace *Dataspace) e
 		f_id = filespace.id
 	}
 
-	return h5err(C.H5Dread(s.id, typ.id, m_id, f_id, 0, unsafe.Pointer(addr)))
+	return h5err(C.H5Dread(s.id, typ.id, m_id, _id, 0, unsafe.Pointer(addr)))
 }
 
 // Read reads raw data from a dataset into a buffer.
