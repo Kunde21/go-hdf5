@@ -89,7 +89,7 @@ func TestFile(t *testing.T) {
 	if name := dset.Name(); name != "/"+dsetName {
 		t.Fatalf("Dataset Name() have %v, want /%v", name, dsetName)
 	}
-	dFile := dset.File()
+	dFile := ((*Identifier)(dset)).File()
 	if dFile.Name() != f.Name() {
 		t.Fatalf("Dataset File() have %v, want %v", dFile.Name(), f.Name())
 	}

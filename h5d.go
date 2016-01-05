@@ -13,12 +13,10 @@ import (
 	"unsafe"
 )
 
-type Dataset struct {
-	Location
-}
+type Dataset Identifier
 
 func newDataset(id C.hid_t) *Dataset {
-	d := &Dataset{Location{Identifier{id}}}
+	d := &Dataset{id: id}
 	runtime.SetFinalizer(d, (*Dataset).finalizer)
 	return d
 }
@@ -64,45 +62,52 @@ func (s *Dataset) Space() *Dataspace {
 
 // ReadSubset reads a subset of raw data from a dataset into a buffer.
 func (s *Dataset) ReadSubset(data interface{}, memspace, filespace *Dataspace) error {
-	dtype, err := s.Datatype()
-	defer dtype.Close()
+
+	v := reflect.ValueOf(data)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return fmt.Errorf("Attribute: Read (non-pointer %v )", v.Kind())
+	}
+
+	var addr uintptr
+	var err error
+	var typ *Datatype
+
+	switch v.Elem().Kind() {
+
+	case reflect.Array:
+		typ, err = NewDataTypeFromType(v.Type().Elem().Elem())
+		addr = v.Elem().UnsafeAddr()
+
+	case reflect.Slice:
+		typ, err = NewDataTypeFromType(v.Type().Elem().Elem())
+		addr = (*reflect.SliceHeader)(unsafe.Pointer(v.Elem().UnsafeAddr())).Data
+
+	case reflect.String:
+		typ, err = NewDataTypeFromType(v.Type().Elem())
+		addr = (*reflect.StringHeader)(unsafe.Pointer(v.Elem().UnsafeAddr())).Data
+
+	case reflect.Ptr:
+		return s.ReadSubset(reflect.Indirect(v).Interface(), memspace, filespace)
+
+	default:
+		typ, err = NewDataTypeFromType(v.Type().Elem())
+		addr = v.Elem().UnsafeAddr()
+	}
+
+	defer typ.Close()
 	if err != nil {
 		return err
 	}
 
-	var addr unsafe.Pointer
-	v := reflect.Indirect(reflect.ValueOf(data))
-
-	switch v.Kind() {
-
-	case reflect.Array:
-		addr = unsafe.Pointer(v.UnsafeAddr())
-
-	case reflect.Slice:
-		slice := (*reflect.SliceHeader)(unsafe.Pointer(v.UnsafeAddr()))
-		addr = unsafe.Pointer(slice.Data)
-
-	case reflect.String:
-		str := (*reflect.StringHeader)(unsafe.Pointer(v.UnsafeAddr()))
-		addr = unsafe.Pointer(str.Data)
-
-	case reflect.Ptr:
-		addr = unsafe.Pointer(v.Pointer())
-
-	default:
-		addr = unsafe.Pointer(v.UnsafeAddr())
-	}
-
-	var filespace_id, memspace_id C.hid_t = 0, 0
+	var f_id, m_id C.hid_t = 0, 0
 	if memspace != nil {
-		memspace_id = memspace.id
+		m_id = memspace.id
 	}
 	if filespace != nil {
-		filespace_id = filespace.id
+		f_id = filespace.id
 	}
-	rc := C.H5Dread(s.id, dtype.id, memspace_id, filespace_id, 0, addr)
-	err = h5err(rc)
-	return err
+
+	return h5err(C.H5Dread(s.id, typ.id, m_id, f_id, 0, unsafe.Pointer(addr)))
 }
 
 // Read reads raw data from a dataset into a buffer.
@@ -148,9 +153,8 @@ func (s *Dataset) WriteSubset(data interface{}, memspace, filespace *Dataspace) 
 	if filespace != nil {
 		filespace_id = filespace.id
 	}
-	rc := C.H5Dwrite(s.id, dtype.id, memspace_id, filespace_id, 0, addr)
-	err = h5err(rc)
-	return err
+
+	return h5err(C.H5Dwrite(s.id, dtype.id, memspace_id, filespace_id, 0, addr))
 }
 
 // Write writes raw data from a buffer to a dataset.
@@ -180,4 +184,8 @@ func (s *Dataset) Datatype() (*Datatype, error) {
 		return nil, fmt.Errorf("couldn't open Datatype from Dataset %q", s.Name())
 	}
 	return newDatatype(dtype_id), nil
+}
+
+func (s *Dataset) Name() string {
+	return ((*Identifier)(s)).Name()
 }

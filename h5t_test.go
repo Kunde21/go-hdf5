@@ -42,7 +42,7 @@ func TestArrayDatatype(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		adt := ArrayType{*dt}
+		adt := (*ArrayType)(dt)
 		if adt.NDims() != dims {
 			t.Errorf("wrong number of dimensions: got %d, want %d", adt.NDims(), dims)
 		}
@@ -65,7 +65,7 @@ func TestStructDatatype(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dt := CompoundType{*dtype}
+	dt := (*CompoundType)(dtype)
 	if dt.NMembers() != 3 {
 		t.Errorf("wrong number of members: got %d, want %d", dt.NMembers(), 3)
 	}

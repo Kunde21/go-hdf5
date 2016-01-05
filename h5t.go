@@ -258,9 +258,7 @@ func (t *Datatype) SetSize(sz uint) error {
 	return h5err(err)
 }
 
-type ArrayType struct {
-	Datatype
-}
+type ArrayType Identifier
 
 // NewArrayType creates a new ArrayType.
 // base_type specifies the element type of the array.
@@ -273,9 +271,25 @@ func NewArrayType(base_type *Datatype, dims []int) (*ArrayType, error) {
 	if err := checkID(hid); err != nil {
 		return nil, err
 	}
-	t := &ArrayType{Datatype{id: hid}}
+	t := &ArrayType{id: hid}
 	runtime.SetFinalizer(t, (*ArrayType).finalizer)
 	return t, nil
+}
+
+// Close releases a datatype.
+func (t *ArrayType) Close() error {
+	if t.id == 0 {
+		return nil
+	}
+	err := h5err(C.H5Tclose(t.id))
+	t.id = 0
+	return err
+}
+
+func (t *ArrayType) finalizer() {
+	if err := t.Close(); err != nil {
+		panic(fmt.Errorf("error closing array datatype: %s", err))
+	}
 }
 
 // NDims returns the rank of an ArrayType.
@@ -300,9 +314,7 @@ func (t *ArrayType) ArrayDims() []int {
 	return dims
 }
 
-type VarLenType struct {
-	Datatype
-}
+type VarLenType Identifier
 
 // NewVarLenType creates a new VarLenType.
 // base_type specifies the element type of the VarLenType.
@@ -311,9 +323,25 @@ func NewVarLenType(base_type *Datatype) (*VarLenType, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
-	t := &VarLenType{Datatype{id: id}}
+	t := &VarLenType{id: id}
 	runtime.SetFinalizer(t, (*VarLenType).finalizer)
 	return t, nil
+}
+
+// Close releases a datatype.
+func (t *VarLenType) Close() error {
+	if t.id == 0 {
+		return nil
+	}
+	err := h5err(C.H5Tclose(t.id))
+	t.id = 0
+	return err
+}
+
+func (t *VarLenType) finalizer() {
+	if err := t.Close(); err != nil {
+		panic(fmt.Errorf("error closing Variable Length Datatype: %s", err))
+	}
 }
 
 // IsVariableStr determines whether the VarLenType is a string.
@@ -321,9 +349,7 @@ func (vl *VarLenType) IsVariableStr() bool {
 	return C.H5Tis_variable_str(vl.id) > 0
 }
 
-type CompoundType struct {
-	Datatype
-}
+type CompoundType Identifier
 
 // NewCompoundType creates a new CompoundType.
 // size is the size in bytes of the compound datatype.
@@ -332,9 +358,25 @@ func NewCompoundType(size int) (*CompoundType, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
-	t := &CompoundType{Datatype{id: id}}
+	t := &CompoundType{id: id}
 	runtime.SetFinalizer(t, (*CompoundType).finalizer)
 	return t, nil
+}
+
+// Close releases a datatype.
+func (t *CompoundType) Close() error {
+	if t.id == 0 {
+		return nil
+	}
+	err := h5err(C.H5Tclose(t.id))
+	t.id = 0
+	return err
+}
+
+func (t *CompoundType) finalizer() {
+	if err := t.Close(); err != nil {
+		panic(fmt.Errorf("error closing compound datatype: %s", err))
+	}
 }
 
 // NMembers returns the number of elements in a compound or enumeration datatype.
@@ -395,9 +437,7 @@ func (t *CompoundType) Pack() error {
 	return h5err(C.H5Tpack(t.id))
 }
 
-type OpaqueDatatype struct {
-	Datatype
-}
+type OpaqueDatatype Identifier
 
 // SetTag tags an opaque datatype.
 func (t *OpaqueDatatype) SetTag(tag string) error {
@@ -414,6 +454,12 @@ func (t *OpaqueDatatype) Tag() string {
 		return C.GoString(cname)
 	}
 	return ""
+}
+
+func (t *OpaqueDatatype) finalizer() {
+	if err := ((*Datatype)(t)).Close(); err != nil {
+		panic(fmt.Errorf("error closing datatype: %s", err))
+	}
 }
 
 // NewDatatypeFromValue creates  a datatype from a value in an interface.
@@ -481,7 +527,7 @@ func NewDataTypeFromType(t reflect.Type) (*Datatype, error) {
 			return nil, err
 		}
 
-		dt = &adt.Datatype
+		dt = (*Datatype)(adt)
 
 	case reflect.Slice:
 		elem_type, err := NewDataTypeFromType(t.Elem())
@@ -494,7 +540,7 @@ func NewDataTypeFromType(t reflect.Type) (*Datatype, error) {
 			return nil, err
 		}
 
-		dt = &sdt.Datatype
+		dt = (*Datatype)(sdt)
 
 	case reflect.Struct:
 		sz := int(t.Size())
@@ -523,7 +569,7 @@ func NewDataTypeFromType(t reflect.Type) (*Datatype, error) {
 				return nil, fmt.Errorf("pb with field [%d-%s]: %s", i, f.Name, err)
 			}
 		}
-		dt = &cdt.Datatype
+		dt = (*Datatype)(cdt)
 
 	default:
 		// Should never happen.
